@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import HeroSection from '../sections/HeroSection';
 import LeadTextSection from '../sections/LeadTextSection';
 import TermFullscreenSection from '../sections/TermFullscreenSection';
+import VariantsSpaceSection from '../sections/VariantsSpaceSection';
 import TermsDetailModal from '../sections/TermsDetailModal';
 import OutroSection from '../sections/OutroSection';
 import FooterSection from '../sections/FooterSection';
@@ -54,13 +55,23 @@ function MagazinePage() {
       {/* 매거진 입장 — 용어 풀스크린 여정 (LeadTextSection과 100svh 겹침) */}
       <SectionContainer sx={ { py: 0, position: 'relative', zIndex: 2, marginTop: '-100svh' } }>
         { terms.allTerms.map((term, index) => (
-          <TermFullscreenSection
-            key={ term.id }
-            term={ term }
-            index={ index }
-            totalCount={ terms.allTerms.length }
-            onDetailClick={ () => setSelectedTerm(term) }
-          />
+          term.id === 'variants-space' ? (
+            <VariantsSpaceSection
+              key={ term.id }
+              term={ term }
+              index={ index }
+              totalCount={ terms.allTerms.length }
+              onDetailClick={ () => setSelectedTerm(term) }
+            />
+          ) : (
+            <TermFullscreenSection
+              key={ term.id }
+              term={ term }
+              index={ index }
+              totalCount={ terms.allTerms.length }
+              onDetailClick={ () => setSelectedTerm(term) }
+            />
+          )
         )) }
 
         {/* GradientOverlay 라이트 전환 트리거 — Outro 진입 전에 전환 시작 */}
