@@ -1,3 +1,4 @@
+import { useRef, useEffect, useCallback } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Container from '@mui/material/Container';
@@ -42,26 +43,57 @@ function TermFullscreenSection({
 }) {
   const orderLabel = `${String(index + 1).padStart(2, '0')} / ${String(totalCount).padStart(2, '0')}`;
 
+  /** 스크롤 기반 구 수렴 (grid variant 전용) */
+  const sectionRef = useRef(null);
+  const scrollInfluenceRef = useRef(0);
+  const isGridVariant = term.motif === 'grid';
+
+  const handleScroll = useCallback(() => {
+    if (!sectionRef.current) return;
+    const rect = sectionRef.current.getBoundingClientRect();
+    const vh = window.innerHeight;
+
+    /** 진입: 섹션 상단이 뷰포트 하단→상단으로 이동 (0→1) */
+    const enterProgress = 1 - (rect.top / vh);
+    /** 퇴장: 섹션 하단이 뷰포트 하단→상단으로 이동 (1→0) */
+    const leaveProgress = rect.bottom / vh;
+
+    const raw = Math.max(0, Math.min(1, Math.min(enterProgress, leaveProgress)));
+    /** ease-out: 진입 시 빠르게 수렴, 퇴장 시 자연스럽게 해체 */
+    scrollInfluenceRef.current = 1 - (1 - raw) * (1 - raw);
+  }, []);
+
+  useEffect(() => {
+    if (!isGridVariant) return;
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [isGridVariant, handleScroll]);
+
   return (
-    <FullPageContainer
-      heightMode="svh"
-      align="end"
-      sx={ {
-        position: 'relative',
-        overflow: 'hidden',
-        ...sx,
-      } }
-    >
-      {/* 배경: GeometricPattern (풀스크린) */}
-      <Box
+    <Box ref={ sectionRef }>
+      <FullPageContainer
+        heightMode="svh"
+        align="end"
         sx={ {
-          position: 'absolute',
-          inset: 0,
-          zIndex: 0,
+          position: 'relative',
+          overflow: 'hidden',
+          ...sx,
         } }
       >
-        <GeometricPattern variant={ term.motif } />
-      </Box>
+        {/* 배경: GeometricPattern (풀스크린) */}
+        <Box
+          sx={ {
+            position: 'absolute',
+            inset: 0,
+            zIndex: 0,
+          } }
+        >
+          <GeometricPattern
+            variant={ term.motif }
+            scrollInfluenceRef={ isGridVariant ? scrollInfluenceRef : undefined }
+          />
+        </Box>
 
       {/* 하단 그라데이션 — 텍스트 가독성 확보 */}
       <Box
@@ -160,7 +192,8 @@ function TermFullscreenSection({
           </Box>
         </FadeTransition>
       </Container>
-    </FullPageContainer>
+      </FullPageContainer>
+    </Box>
   );
 }
 

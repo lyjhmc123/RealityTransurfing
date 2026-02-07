@@ -139,17 +139,20 @@ const blackholeFragmentShader = `
  * @param {string} colorStroke - 선/점 색상 [Optional, 기본값: '#F5F2EE']
  * @param {string} colorAccent - 강조 포인트 색상 [Optional, 기본값: '#FFC66E']
  * @param {string} colorBackground - 배경 색상 [Optional, 기본값: '#12100E']
+ * @param {object} scrollInfluenceRef - 스크롤 기반 수렴 제어 ref (.current = 0-1) [Optional]
  * @param {object} sx - MUI sx 스타일 [Optional]
  *
  * Example usage:
  * <GeometricPattern variant="grid" />
  * <GeometricPattern variant="warp" />
+ * <GeometricPattern variant="grid" scrollInfluenceRef={scrollRef} />
  */
 function GeometricPattern({
   variant,
   colorStroke = '#F5F2EE',
   colorAccent = '#FFC66E',
   colorBackground = '#12100E',
+  scrollInfluenceRef,
   sx,
 }) {
   const svgRef = useRef(null);
@@ -245,10 +248,11 @@ function GeometricPattern({
 
   /** grid variant → Three.js 캔버스 경로 */
   if (variant === 'grid') {
+    const isScrollDriven = !!scrollInfluenceRef;
     return (
       <Box
-        onMouseMove={ handleMouseMove }
-        onMouseLeave={ handleMouseLeave }
+        onMouseMove={ isScrollDriven ? undefined : handleMouseMove }
+        onMouseLeave={ isScrollDriven ? undefined : handleMouseLeave }
         sx={ {
           width: '100%',
           height: '100%',
@@ -261,7 +265,8 @@ function GeometricPattern({
           colorStroke={ colorStroke }
           colorAccent={ colorAccent }
           colorBackground={ colorBackground }
-          mouseCenter={ warpState }
+          mouseCenter={ isScrollDriven ? null : warpState }
+          scrollInfluenceRef={ isScrollDriven ? scrollInfluenceRef : undefined }
         />
       </Box>
     );
@@ -582,11 +587,15 @@ function hexToGLColor(hex) {
  * @param {string} colorAccent - 수렴 시 노란색 강조 색상 [Required]
  * @param {string} colorBackground - 배경 색상 [Required]
  * @param {object} mouseCenter - 마우스 좌표 {x, y, influence} [Optional]
+ * @param {object} scrollInfluenceRef - 스크롤 기반 수렴 제어 ref (.current = 0-1) [Optional]
  */
-function BlackholeGridPattern({ colorStroke, colorAccent, colorBackground, mouseCenter }) {
+function BlackholeGridPattern({ colorStroke, colorAccent, colorBackground, mouseCenter, scrollInfluenceRef }) {
   const containerRef = useRef(null);
   const mouseRef = useRef({ x: 0, y: 0, influence: 0 });
   const animationIdRef = useRef(0);
+  /** 스크롤 기반 모드: 클로저 안전을 위해 로컬 ref로 감싸기 */
+  const scrollInflRefLocal = useRef(scrollInfluenceRef);
+  scrollInflRefLocal.current = scrollInfluenceRef;
 
   /** mouseCenter prop → ref 동기화 (rAF 루프에서 최신값 참조) */
   useEffect(() => {
@@ -703,12 +712,21 @@ function BlackholeGridPattern({ colorStroke, colorAccent, colorBackground, mouse
       const elapsed = clock.getElapsedTime();
       uniforms.uTime.value = elapsed;
 
-      /** 마우스 uniform 이징 업데이트 */
-      const m = mouseRef.current;
-      const currentMouse = uniforms.uMouse.value;
-      currentMouse.x += (m.x - currentMouse.x) * 0.08;
-      currentMouse.y += (m.y - currentMouse.y) * 0.08;
-      uniforms.uMouseInfluence.value += (m.influence - uniforms.uMouseInfluence.value) * 0.06;
+      /** 스크롤 기반 모드: 구 위치 = 캔버스 중앙(0,0), influence = ref.current */
+      const scrollRef = scrollInflRefLocal.current;
+      if (scrollRef) {
+        const currentMouse = uniforms.uMouse.value;
+        currentMouse.x += (0 - currentMouse.x) * 0.08;
+        currentMouse.y += (0 - currentMouse.y) * 0.08;
+        uniforms.uMouseInfluence.value += (scrollRef.current - uniforms.uMouseInfluence.value) * 0.06;
+      } else {
+        /** 마우스 uniform 이징 업데이트 */
+        const m = mouseRef.current;
+        const currentMouse = uniforms.uMouse.value;
+        currentMouse.x += (m.x - currentMouse.x) * 0.08;
+        currentMouse.y += (m.y - currentMouse.y) * 0.08;
+        uniforms.uMouseInfluence.value += (m.influence - uniforms.uMouseInfluence.value) * 0.06;
+      }
 
       renderer.render(scene, camera);
       animationIdRef.current = requestAnimationFrame(animate);
