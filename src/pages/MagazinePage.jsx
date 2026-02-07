@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { LayoutGroup } from 'framer-motion';
 import HeroSection from '../sections/HeroSection';
 import EditorLetterSection from '../sections/EditorLetterSection';
 import IndexSection from '../sections/IndexSection';
@@ -6,6 +7,7 @@ import CommentSection from '../sections/CommentSection';
 import TermsSection from '../sections/TermsSection';
 import ArticleSection from '../sections/ArticleSection';
 import ArticleDetailModal from '../sections/ArticleDetailModal';
+import TermsDetailModal from '../sections/TermsDetailModal';
 import StorySection from '../sections/StorySection';
 import SurveySection from '../sections/SurveySection';
 import OutroSection from '../sections/OutroSection';
@@ -35,6 +37,7 @@ function MagazinePage() {
   const { intro, editorLetter, index, comments, terms, articles, stories, survey, outro, footer } = magazineData;
   const outroRef = useRef(null);
   const [selectedArticle, setSelectedArticle] = useState(null);
+  const [selectedTerm, setSelectedTerm] = useState(null);
 
   return (
     <PageContainer maxWidth={ false } disableGutters>
@@ -78,12 +81,20 @@ function MagazinePage() {
           comments={ comments.comments }
         />
 
-        {/* 5. Terms — 트랜서핑 주요 용어 */}
-        <TermsSection
-          sectionTitle={ terms.sectionTitle }
-          leadText={ terms.leadText }
-          featured={ terms.featured }
-        />
+        {/* 5. Terms — 트랜서핑 주요 용어 (LayoutGroup으로 카드→모달 공유 애니메이션) */}
+        <LayoutGroup>
+          <TermsSection
+            sectionTitle={ terms.sectionTitle }
+            leadText={ terms.leadText }
+            featured={ terms.featured }
+            onCardClick={ (term) => setSelectedTerm(term) }
+          />
+          <TermsDetailModal
+            isOpen={ Boolean(selectedTerm) }
+            onClose={ () => setSelectedTerm(null) }
+            term={ selectedTerm }
+          />
+        </LayoutGroup>
 
         {/* 6. Article — 깊이 있는 아티클 */}
         <ArticleSection

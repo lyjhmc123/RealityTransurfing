@@ -2,6 +2,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Container from '@mui/material/Container';
 import Button from '@mui/material/Button';
+import { motion } from 'framer-motion';
 import { HorizontalScrollContainer } from '../components/content-transition/HorizontalScrollContainer';
 import PerspectiveTransition from '../components/motion/PerspectiveTransition';
 import GeometricPattern from '../components/dynamic-color/GeometricPattern';
@@ -29,7 +30,7 @@ import GeometricPattern from '../components/dynamic-color/GeometricPattern';
  * @param {string} ctaText - CTA 버튼 텍스트 [Optional, 기본값: '전체보기']
  * @param {Array} featured - 주요 용어 카드 목록 [{ id, motif, title, description }] [Required]
  * @param {function} onCtaClick - CTA 클릭 핸들러 [Optional]
- * @param {function} onCardClick - 카드 클릭 핸들러 (id를 인자로 전달) [Optional]
+ * @param {function} onCardClick - 카드 클릭 핸들러 (term 객체를 인자로 전달) [Optional]
  * @param {object} sx - 추가 스타일 [Optional]
  *
  * Example usage:
@@ -129,7 +130,7 @@ function TermsSection({
               duration={ 700 }
             >
               <Box
-                onClick={ () => onCardClick?.(term.id) }
+                onClick={ () => onCardClick?.(term) }
                 sx={ {
                   width: { xs: 320, sm: 400, md: 460 },
                   flexShrink: 0,
@@ -139,11 +140,12 @@ function TermsSection({
                   },
                 } }
               >
-                {/* 기하학 패턴 */}
-                <Box
-                  sx={ {
+                {/* 기하학 패턴 — layoutId로 모달 전환 시 공유 애니메이션 */}
+                <motion.div
+                  layoutId={ `term-pattern-${term.id}` }
+                  style={ {
                     overflow: 'hidden',
-                    mb: 2.5,
+                    marginBottom: 20,
                   } }
                 >
                   <Box
@@ -156,7 +158,7 @@ function TermsSection({
                   >
                     <GeometricPattern variant={ term.motif } />
                   </Box>
-                </Box>
+                </motion.div>
 
                 {/* 타이틀 */}
                 <Typography
