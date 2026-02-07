@@ -2,6 +2,48 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import GeometricPattern from '../components/dynamic-color/GeometricPattern';
 
+/** 본문 텍스트에서 bodyHighlights 배열에 해당하는 문자열의 첫 등장만 볼드+액센트로 렌더링 */
+function renderBodyWithHighlights(text, highlights) {
+  if (!highlights || highlights.length === 0) return text;
+
+  let segments = [text];
+
+  highlights.forEach((hl) => {
+    let found = false;
+    const next = [];
+
+    segments.forEach((seg) => {
+      if (found || typeof seg !== 'string') {
+        next.push(seg);
+        return;
+      }
+      const idx = seg.indexOf(hl);
+      if (idx === -1) {
+        next.push(seg);
+        return;
+      }
+      found = true;
+      if (idx > 0) next.push(seg.slice(0, idx));
+      next.push({ text: hl });
+      if (idx + hl.length < seg.length) next.push(seg.slice(idx + hl.length));
+    });
+
+    segments = next;
+  });
+
+  return segments.map((seg, i) => {
+    if (typeof seg === 'string') return seg;
+    return (
+      <span
+        key={ i }
+        style={ { color: '#FFC66E', fontWeight: 700 } }
+      >
+        { seg.text }
+      </span>
+    );
+  });
+}
+
 /**
  * VariantsSpaceCard 컴포넌트
  *
@@ -18,6 +60,7 @@ import GeometricPattern from '../components/dynamic-color/GeometricPattern';
  * @param {string} headline - 카드 제목 [Required]
  * @param {string} body - 카드 본문 [Required]
  * @param {string} bodyHighlight - 본문 하단 강조 텍스트 (볼드 + 액센트 컬러) [Optional]
+ * @param {string[]} bodyHighlights - 본문 내 인라인 강조 문자열 배열 (볼드 + 액센트 컬러) [Optional]
  * @param {object} scrollInfluenceRef - 스크롤 기반 수렴 제어 ref (grid variant 전용) [Optional]
  * @param {object} visualRef - 비주얼 영역 DOM ref (부모에서 opacity 제어용) [Optional]
  * @param {object} sx - 추가 스타일 [Optional]
@@ -34,6 +77,7 @@ function VariantsSpaceCard({
   headline,
   body,
   bodyHighlight,
+  bodyHighlights = [],
   scrollInfluenceRef,
   visualRef,
   sx = {},
@@ -99,6 +143,7 @@ function VariantsSpaceCard({
         {/* 본문 */}
         <Typography
           variant="body1"
+          component="div"
           sx={ {
             color: 'rgba(245, 242, 238, 0.7)',
             fontSize: { xs: '0.9rem', md: '0.95rem' },
@@ -107,7 +152,7 @@ function VariantsSpaceCard({
             whiteSpace: 'pre-line',
           } }
         >
-          { body }
+          { renderBodyWithHighlights(body, bodyHighlights) }
         </Typography>
 
         {/* 강조 텍스트 */}

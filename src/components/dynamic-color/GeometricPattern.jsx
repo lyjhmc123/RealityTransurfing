@@ -90,6 +90,419 @@ const blackholeVertexShader = `
   }
 `;
 
+/** GLSL vertex shader — 스포트라이트: 별들 사이를 떠다니는 노란 불빛 */
+const spotlightVertexShader = `
+  attribute float aBaseRadius;
+  attribute float aAngle;
+  attribute float aSpeed;
+  attribute float aSize;
+  attribute float aOpacity;
+  attribute float aDepth;
+
+  uniform float uTime;
+  uniform vec2 uSpotlight;
+  uniform float uSpotlightRadius;
+
+  varying float vSpotlightInfluence;
+  varying float vOpacity;
+
+  void main() {
+    // === 자유 부유 (grid variant 드리프트 로직 재사용) ===
+    float t = uTime * aSpeed * 0.2;
+    float driftX = aBaseRadius * cos(aAngle + t * 0.3)
+                 + sin(t * 0.7 + aAngle * 2.3) * 0.5
+                 + cos(t * 1.3 + aAngle * 4.1) * 0.15;
+    float driftY = aBaseRadius * sin(aAngle + t * 0.25) * 1.2
+                 + cos(t * 0.5 + aAngle * 1.7) * 0.4
+                 + sin(t * 1.1 + aAngle * 3.7) * 0.12;
+    float driftZ = aDepth * sin(t * 0.15 + aAngle) * 0.5;
+
+    vec3 pos = vec3(driftX, driftY, driftZ);
+
+    // === 스포트라이트 영향도 계산 ===
+    float dist = length(pos.xy - uSpotlight);
+    float normDist = dist / uSpotlightRadius;
+    // smoothstep + hermite로 부드러운 경계
+    float influence = 1.0 - smoothstep(0.0, 1.0, normDist);
+    influence = influence * influence * (3.0 - 2.0 * influence);
+    vSpotlightInfluence = influence;
+
+    // 영향권 내: 밝고 크게 / 영향권 밖: 희미하고 작게
+    float baseOpacity = aOpacity * mix(0.1, 0.8, influence);
+    vOpacity = baseOpacity;
+
+    float baseSize = aSize * mix(0.6, 2.0, influence);
+    float perspScale = 1.0 / (1.0 + abs(pos.z) * 0.3);
+    gl_PointSize = baseSize * perspScale;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`;
+
+/** GLSL fragment shader — 스포트라이트 영향도 기반 색상 보간 + 미세 글로우 */
+const spotlightFragmentShader = `
+  uniform vec3 uColorStroke;
+  uniform vec3 uColorAccent;
+
+  varying float vSpotlightInfluence;
+  varying float vOpacity;
+
+  void main() {
+    // 원형 포인트 스프라이트 (소프트 엣지)
+    vec2 center = gl_PointCoord - 0.5;
+    float dist = length(center);
+    float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
+
+    if (alpha < 0.01) discard;
+
+    // 스포트라이트 영향도에 따라 stroke(흰색) → accent(노란색) 보간
+    vec3 color = mix(uColorStroke, uColorAccent, vSpotlightInfluence);
+
+    // 스포트라이트 내부 미세 글로우
+    float glow = 1.0 + vSpotlightInfluence * smoothstep(0.3, 0.0, dist) * 0.5;
+    color *= glow;
+
+    gl_FragColor = vec4(color, alpha * vOpacity);
+  }
+`;
+
+/** GLSL vertex shader — 손전등: 빠르게 이리저리 비추며 공간을 드러냄 */
+const flashlightVertexShader = `
+  attribute float aBaseRadius;
+  attribute float aAngle;
+  attribute float aSpeed;
+  attribute float aSize;
+  attribute float aOpacity;
+  attribute float aDepth;
+
+  uniform float uTime;
+  uniform vec2 uFlashlight;
+  uniform float uFlashlightRadius;
+
+  varying float vFlashInfluence;
+  varying float vOpacity;
+  varying float vCenterDist;
+
+  void main() {
+    // === 자유 부유 ===
+    float t = uTime * aSpeed * 0.2;
+    float driftX = aBaseRadius * cos(aAngle + t * 0.3)
+                 + sin(t * 0.7 + aAngle * 2.3) * 0.5
+                 + cos(t * 1.3 + aAngle * 4.1) * 0.15;
+    float driftY = aBaseRadius * sin(aAngle + t * 0.25) * 1.2
+                 + cos(t * 0.5 + aAngle * 1.7) * 0.4
+                 + sin(t * 1.1 + aAngle * 3.7) * 0.12;
+    float driftZ = aDepth * sin(t * 0.15 + aAngle) * 0.5;
+
+    vec3 pos = vec3(driftX, driftY, driftZ);
+
+    // === 손전등 영향도 — 날카로운 경계 + 강한 대비 ===
+    float dist = length(pos.xy - uFlashlight);
+    float normDist = dist / uFlashlightRadius;
+    // 빠른 falloff: 중심 밝고 가장자리 급격히 어두움
+    float influence = 1.0 - smoothstep(0.0, 0.8, normDist);
+    influence = pow(influence, 1.5);
+    vFlashInfluence = influence;
+    vCenterDist = normDist;
+
+    // 높은 대비: 영향권 밖 거의 안 보임, 안은 매우 밝음
+    float baseOpacity = aOpacity * mix(0.03, 1.0, influence);
+    vOpacity = baseOpacity;
+
+    float baseSize = aSize * mix(0.4, 3.5, influence);
+    float perspScale = 1.0 / (1.0 + abs(pos.z) * 0.3);
+    gl_PointSize = baseSize * perspScale;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`;
+
+/** GLSL fragment shader — 손전등: 강한 글로우 + 밝은 노란 코어 */
+const flashlightFragmentShader = `
+  uniform vec3 uColorStroke;
+  uniform vec3 uColorAccent;
+
+  varying float vFlashInfluence;
+  varying float vOpacity;
+  varying float vCenterDist;
+
+  void main() {
+    vec2 center = gl_PointCoord - 0.5;
+    float dist = length(center);
+    float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+
+    if (alpha < 0.01) discard;
+
+    // 영향도에 따라 흰색 → 따뜻한 노란색
+    vec3 color = mix(uColorStroke, uColorAccent, vFlashInfluence);
+
+    // 빛 중심에 가까울수록 강한 백열 글로우
+    float coreGlow = smoothstep(0.5, 0.0, vCenterDist) * vFlashInfluence;
+    color = mix(color, vec3(1.0, 0.95, 0.85), coreGlow * 0.4);
+
+    // 파티클 중심 글로우
+    float pointGlow = 1.0 + vFlashInfluence * smoothstep(0.25, 0.0, dist) * 0.8;
+    color *= pointGlow;
+
+    gl_FragColor = vec4(color, alpha * vOpacity);
+  }
+`;
+
+/** GLSL vertex shader — 레일: 얽혀진 인생트랙, 노란빛이 레일을 따라 채워짐 */
+const nebulaVertexShader = `
+  attribute float aBaseRadius;
+  attribute float aAngle;
+  attribute float aSpeed;
+  attribute float aSize;
+  attribute float aOpacity;
+  attribute float aDepth;
+
+  uniform float uTime;
+  uniform float uActiveLane;
+  uniform float uFillProgress;
+
+  varying float vLaneInfluence;
+  varying float vOpacity;
+
+  void main() {
+    // === 레인 배정 (0-3) ===
+    float laneF = floor(mod(aAngle * 2.0 / 3.14159265, 4.0));
+
+    // === 레일 위 파티클 위치 (t: -1~1 → posX: -2.5~2.5) ===
+    float t = (aBaseRadius - 2.0) / 1.5;
+    float posX = t * 2.5;
+
+    // === 4개의 고유한 레일 곡선 (서로 교차하며 얽힘) ===
+    float laneY;
+    if (laneF < 0.5) {
+      laneY = sin(posX * 0.7) * 0.9 + cos(posX * 0.3) * 0.2;
+    } else if (laneF < 1.5) {
+      laneY = cos(posX * 0.85 + 1.2) * 0.7 + sin(posX * 0.4 + 0.5) * 0.25;
+    } else if (laneF < 2.5) {
+      laneY = -sin(posX * 0.75 + 2.5) * 0.8 - cos(posX * 0.35 + 1.8) * 0.2;
+    } else {
+      laneY = cos(posX * 0.65 + 4.0) * 0.6 + sin(posX * 0.5 + 3.0) * 0.3;
+    }
+
+    // === 레일 폭 — 얇고 선명한 트랙 ===
+    float spread = (aOpacity - 0.4) * 0.1 + sin(aAngle * 11.0) * 0.02;
+    float posY = laneY + spread;
+    float posZ = aDepth * 0.12;
+
+    vec3 pos = vec3(posX, posY, posZ);
+
+    // === 레일 따라 채워지는 노란빛 ===
+    float particleProgress = (posX + 2.5) / 5.0;
+
+    // 현재 활성 레인 판별
+    float activeMod = mod(uActiveLane, 4.0);
+    float laneDist = abs(laneF - activeMod);
+    laneDist = min(laneDist, 4.0 - laneDist);
+    float isActive = 1.0 - step(0.5, laneDist);
+
+    // 채움 전선: fillProgress까지 채워짐
+    float filled = isActive * (1.0 - smoothstep(uFillProgress - 0.08, uFillProgress, particleProgress));
+
+    // 이전 레인: 새 레인이 채워질수록 서서히 페이드아웃
+    float prevMod = mod(uActiveLane - 1.0 + 4.0, 4.0);
+    float prevDist = abs(laneF - prevMod);
+    prevDist = min(prevDist, 4.0 - prevDist);
+    float isPrev = 1.0 - step(0.5, prevDist);
+    float prevFade = isPrev * max(0.0, 1.0 - uFillProgress * 1.5);
+
+    float influence = max(filled, prevFade);
+    vLaneInfluence = influence;
+
+    // 비활성: 불투명한 레일, 활성: 밝은 노란 레일
+    vOpacity = mix(0.5, 1.0, influence);
+
+    float baseSize = aSize * mix(1.2, 2.8, influence);
+    float perspScale = 1.0 / (1.0 + abs(pos.z) * 0.3);
+    gl_PointSize = baseSize * perspScale;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`;
+
+/** GLSL fragment shader — 레일: 채움 기반 노란색 점등 + 글로우 */
+const nebulaFragmentShader = `
+  uniform vec3 uColorStroke;
+  uniform vec3 uColorAccent;
+
+  varying float vLaneInfluence;
+  varying float vOpacity;
+
+  void main() {
+    vec2 center = gl_PointCoord - 0.5;
+    float dist = length(center);
+    float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+
+    if (alpha < 0.01) discard;
+
+    // 비활성: stroke 컬러(흰색), 활성: accent 컬러(노란색 #FFC66E)
+    float colorInfluence = smoothstep(0.0, 0.15, vLaneInfluence);
+    vec3 color = mix(uColorStroke * 0.6, uColorAccent, colorInfluence);
+
+    // 활성 파티클 글로우 — 강한 노란빛
+    float glow = 1.0 + colorInfluence * smoothstep(0.25, 0.0, dist) * 1.2;
+    color *= glow;
+
+    gl_FragColor = vec4(color, alpha * vOpacity);
+  }
+`;
+
+/** GLSL vertex shader — 선택: 가능태 구가 회전하고 우측 노란빛이 한쪽 면을 비춤 */
+const chooseVertexShader = `
+  attribute float aBaseRadius;
+  attribute float aAngle;
+  attribute float aSpeed;
+  attribute float aSize;
+  attribute float aOpacity;
+  attribute float aDepth;
+
+  uniform float uTime;
+
+  varying float vIllumination;
+  varying float vOpacity;
+
+  void main() {
+    // === 구 표면 균등 배치 ===
+    float theta = aAngle;
+    float u = clamp((aBaseRadius - 0.5) / 3.0, 0.0, 1.0);
+    float phi = acos(1.0 - 2.0 * u);
+
+    float r = 1.6 + aDepth * 0.04;
+
+    // 구 좌표 → 직교 좌표 (구는 고정)
+    float x = r * sin(phi) * cos(theta);
+    float y = r * cos(phi);
+    float z = r * sin(phi) * sin(theta);
+
+    vec3 pos = vec3(x, y, z);
+
+    // === 노란빛이 천천히 이동하며 구의 여기저기를 비춤 ===
+    vec3 normal = normalize(pos);
+    float lAngleY = sin(uTime * 0.3) * 1.2 + cos(uTime * 0.17) * 0.5;
+    float lAngleX = cos(uTime * 0.23) * 0.6 + sin(uTime * 0.11) * 0.3;
+    vec3 lightDir = normalize(vec3(cos(lAngleY), sin(lAngleX) * 0.4, sin(lAngleY)));
+    float NdotL = dot(normal, lightDir);
+    float illumination = smoothstep(-0.15, 0.6, NdotL);
+
+    vIllumination = illumination;
+
+    // 어두운 면: 희미, 밝은 면: 밝고 크게
+    vOpacity = aOpacity * mix(0.2, 1.0, illumination);
+
+    float baseSize = aSize * mix(0.5, 2.8, illumination);
+    float perspScale = 1.0 / (1.0 + pos.z * 0.15);
+    gl_PointSize = baseSize * perspScale;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`;
+
+/** GLSL fragment shader — 선택: 노란빛에 비춰진 면은 accent, 어두운 면은 stroke */
+const chooseFragmentShader = `
+  uniform vec3 uColorStroke;
+  uniform vec3 uColorAccent;
+
+  varying float vIllumination;
+  varying float vOpacity;
+
+  void main() {
+    vec2 center = gl_PointCoord - 0.5;
+    float dist = length(center);
+    float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+
+    if (alpha < 0.01) discard;
+
+    // 비춰진 면: accent 노란색 (#FFC66E), 어두운 면: stroke 흰색 희미
+    float colorInfluence = smoothstep(0.0, 0.25, vIllumination);
+    vec3 color = mix(uColorStroke * 0.35, uColorAccent, colorInfluence);
+
+    // 밝은 면 글로우
+    float glow = 1.0 + colorInfluence * smoothstep(0.25, 0.0, dist) * 1.2;
+    color *= glow;
+
+    gl_FragColor = vec4(color, alpha * vOpacity);
+  }
+`;
+
+/** GLSL vertex shader — 산개: 각자의 현실이 독립적으로 빛남 */
+const scatterVertexShader = `
+  attribute float aBaseRadius;
+  attribute float aAngle;
+  attribute float aSpeed;
+  attribute float aSize;
+  attribute float aOpacity;
+  attribute float aDepth;
+
+  uniform float uTime;
+
+  varying float vPulse;
+  varying float vOpacity;
+
+  void main() {
+    // === 자유 부유 ===
+    float t = uTime * aSpeed * 0.2;
+    float driftX = aBaseRadius * cos(aAngle + t * 0.3)
+                 + sin(t * 0.7 + aAngle * 2.3) * 0.5
+                 + cos(t * 1.3 + aAngle * 4.1) * 0.15;
+    float driftY = aBaseRadius * sin(aAngle + t * 0.25) * 1.2
+                 + cos(t * 0.5 + aAngle * 1.7) * 0.4
+                 + sin(t * 1.1 + aAngle * 3.7) * 0.12;
+    float driftZ = aDepth * sin(t * 0.15 + aAngle) * 0.5;
+
+    vec3 pos = vec3(driftX, driftY, driftZ);
+
+    // === 개별 펄스: 파티클마다 독립적인 위상과 주기 ===
+    float phase1 = aAngle * 3.7 + aBaseRadius * 2.1;
+    float phase2 = aDepth * 5.3 + aSpeed * 4.1;
+    float wave1 = sin(uTime * 0.5 + phase1);
+    float wave2 = sin(uTime * 0.37 + phase2);
+    float combined = (wave1 + wave2) * 0.5;
+
+    // 상위 ~15%만 활성화 (높은 threshold → 희소한 점등)
+    float pulse = smoothstep(0.55, 0.85, combined);
+    vPulse = pulse;
+
+    // 비활성: 매우 희미, 활성: 밝게
+    vOpacity = aOpacity * mix(0.06, 0.9, pulse);
+
+    float baseSize = aSize * mix(0.5, 3.0, pulse);
+    float perspScale = 1.0 / (1.0 + abs(pos.z) * 0.3);
+    gl_PointSize = baseSize * perspScale;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`;
+
+/** GLSL fragment shader — 산개: 펄스 기반 노란색 점등 + 글로우 */
+const scatterFragmentShader = `
+  uniform vec3 uColorStroke;
+  uniform vec3 uColorAccent;
+
+  varying float vPulse;
+  varying float vOpacity;
+
+  void main() {
+    vec2 center = gl_PointCoord - 0.5;
+    float dist = length(center);
+    float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+
+    if (alpha < 0.01) discard;
+
+    // 펄스에 따라 흰색 → 노란색
+    vec3 color = mix(uColorStroke, uColorAccent, vPulse);
+
+    // 활성 파티클 중심 글로우
+    float glow = 1.0 + vPulse * smoothstep(0.25, 0.0, dist) * 0.6;
+    color *= glow;
+
+    gl_FragColor = vec4(color, alpha * vOpacity);
+  }
+`;
+
 /** GLSL fragment shader — 수렴도 + 깊이 기반 3D 구 셰이딩 */
 const blackholeFragmentShader = `
   uniform vec3 uColorStroke;
@@ -135,7 +548,7 @@ const blackholeFragmentShader = `
  *
  * Props:
  * @param {string} variant - 기하학 패턴 타입 [Required]
- *   'grid' | 'ripple' | 'warp' | 'burst' | 'flow' | 'reflect' | 'duality' | 'layers'
+ *   'grid' | 'spotlight' | 'flashlight' | 'scatter' | 'nebula' | 'choose' | 'ripple' | 'warp' | 'burst' | 'flow' | 'reflect' | 'duality' | 'layers'
  * @param {string} colorStroke - 선/점 색상 [Optional, 기본값: '#F5F2EE']
  * @param {string} colorAccent - 강조 포인트 색상 [Optional, 기본값: '#FFC66E']
  * @param {string} colorBackground - 배경 색상 [Optional, 기본값: '#12100E']
@@ -267,6 +680,111 @@ function GeometricPattern({
           colorBackground={ colorBackground }
           mouseCenter={ isScrollDriven ? null : warpState }
           scrollInfluenceRef={ isScrollDriven ? scrollInfluenceRef : undefined }
+        />
+      </Box>
+    );
+  }
+
+  /** spotlight variant → Three.js 캔버스 경로 (마우스 인터랙션 불필요) */
+  if (variant === 'spotlight') {
+    return (
+      <Box
+        sx={ {
+          width: '100%',
+          height: '100%',
+          backgroundColor: colorBackground,
+          overflow: 'hidden',
+          ...sx,
+        } }
+      >
+        <SpotlightPattern
+          colorStroke={ colorStroke }
+          colorAccent={ colorAccent }
+          colorBackground={ colorBackground }
+        />
+      </Box>
+    );
+  }
+
+  /** flashlight variant → Three.js 캔버스, 빠르고 다이나믹한 손전등 */
+  if (variant === 'flashlight') {
+    return (
+      <Box
+        sx={ {
+          width: '100%',
+          height: '100%',
+          backgroundColor: colorBackground,
+          overflow: 'hidden',
+          ...sx,
+        } }
+      >
+        <FlashlightPattern
+          colorStroke={ colorStroke }
+          colorAccent={ colorAccent }
+          colorBackground={ colorBackground }
+        />
+      </Box>
+    );
+  }
+
+  /** nebula variant → Three.js 캔버스, 성간 레인 순환 */
+  if (variant === 'nebula') {
+    return (
+      <Box
+        sx={ {
+          width: '100%',
+          height: '100%',
+          backgroundColor: colorBackground,
+          overflow: 'hidden',
+          ...sx,
+        } }
+      >
+        <NebulaPattern
+          colorStroke={ colorStroke }
+          colorAccent={ colorAccent }
+          colorBackground={ colorBackground }
+        />
+      </Box>
+    );
+  }
+
+  /** choose variant → Three.js 캔버스, 여러 레일 중 하나를 선택 */
+  if (variant === 'choose') {
+    return (
+      <Box
+        sx={ {
+          width: '100%',
+          height: '100%',
+          backgroundColor: colorBackground,
+          overflow: 'hidden',
+          ...sx,
+        } }
+      >
+        <ChoosePattern
+          colorStroke={ colorStroke }
+          colorAccent={ colorAccent }
+          colorBackground={ colorBackground }
+        />
+      </Box>
+    );
+  }
+
+  /** scatter variant → Three.js 캔버스, 독립 펄스로 여기저기 빛남 */
+  if (variant === 'scatter') {
+    return (
+      <Box
+        sx={ {
+          width: '100%',
+          height: '100%',
+          backgroundColor: colorBackground,
+          overflow: 'hidden',
+          ...sx,
+        } }
+      >
+        <ScatterPattern
+          colorStroke={ colorStroke }
+          colorAccent={ colorAccent }
+          colorBackground={ colorBackground }
         />
       </Box>
     );
@@ -735,6 +1253,799 @@ function BlackholeGridPattern({ colorStroke, colorAccent, colorBackground, mouse
     animate();
 
     /** 리소스 정리 */
+    return () => {
+      cancelAnimationFrame(animationIdRef.current);
+      resizeObserver.disconnect();
+      geometry.dispose();
+      material.dispose();
+      renderer.dispose();
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
+      }
+    };
+  }, [colorStroke, colorAccent, colorBackground]);
+
+  return (
+    <Box
+      ref={ containerRef }
+      sx={ {
+        width: '100%',
+        height: '100%',
+        '& canvas': {
+          display: 'block',
+          width: '100% !important',
+          height: '100% !important',
+        },
+      } }
+    />
+  );
+}
+
+/**
+ * SpotlightPattern — 어두운 숲에서 손전등을 비추는 듯한 인터랙션
+ *
+ * 동작 흐름:
+ * 1. 100,000개 파티클이 별처럼 흩어져 희미하게 떠다닌다
+ * 2. 노란 스포트라이트가 Lissajous 곡선을 따라 자동으로 천천히 이동한다
+ * 3. 스포트라이트 반경 안의 별만 밝은 노란색으로 빛나고, 크기가 커진다
+ * 4. 반경 밖의 별은 매우 희미하게 유지된다
+ * 5. 스포트라이트 반경이 호흡하듯 미세하게 변한다
+ *
+ * Props:
+ * @param {string} colorStroke - 파티클 기본 색상 (영향권 밖) [Required]
+ * @param {string} colorAccent - 스포트라이트 영향권 내 노란색 [Required]
+ * @param {string} colorBackground - 배경 색상 [Required]
+ */
+function SpotlightPattern({ colorStroke, colorAccent, colorBackground }) {
+  const containerRef = useRef(null);
+  const animationIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const PARTICLE_COUNT = 100000;
+
+    /** Three.js 씬 초기화 */
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(colorBackground);
+
+    const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+    camera.position.set(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const { width, height } = container.getBoundingClientRect();
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    container.appendChild(renderer.domElement);
+
+    /** 파티클 어트리뷰트 초기화 (seededRandom 기반 결정론적 배치) */
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const baseRadii = new Float32Array(PARTICLE_COUNT);
+    const angles = new Float32Array(PARTICLE_COUNT);
+    const speeds = new Float32Array(PARTICLE_COUNT);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+    const opacities = new Float32Array(PARTICLE_COUNT);
+    const depths = new Float32Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const si = i * 6 + 777;
+      positions[i * 3] = 0;
+      positions[i * 3 + 1] = 0;
+      positions[i * 3 + 2] = 0;
+
+      baseRadii[i] = 0.5 + seededRandom(si) * 3.0;
+      angles[i] = seededRandom(si + 1) * Math.PI * 2;
+      speeds[i] = 0.3 + seededRandom(si + 2) * 0.7;
+      sizes[i] = 1.0 + seededRandom(si + 3) * 4.0;
+      opacities[i] = 0.15 + seededRandom(si + 4) * 0.55;
+      depths[i] = -1.0 + seededRandom(si + 5) * 2.0;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aBaseRadius', new THREE.BufferAttribute(baseRadii, 1));
+    geometry.setAttribute('aAngle', new THREE.BufferAttribute(angles, 1));
+    geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aOpacity', new THREE.BufferAttribute(opacities, 1));
+    geometry.setAttribute('aDepth', new THREE.BufferAttribute(depths, 1));
+
+    /** bounding sphere 수동 설정 (vertex shader에서 위치 덮어쓰므로) */
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10);
+
+    /** 색상 uniform */
+    const strokeRgb = hexToGLColor(colorStroke);
+    const accentRgb = hexToGLColor(colorAccent);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uSpotlight: { value: new THREE.Vector2(0, 0) },
+      uSpotlightRadius: { value: 1.8 },
+      uColorStroke: { value: new THREE.Color(...strokeRgb) },
+      uColorAccent: { value: new THREE.Color(...accentRgb) },
+    };
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: spotlightVertexShader,
+      fragmentShader: spotlightFragmentShader,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+    });
+
+    const points = new THREE.Points(geometry, material);
+    scene.add(points);
+
+    /** ResizeObserver로 컨테이너 크기 추적 */
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: w, height: h } = entry.contentRect;
+        if (w > 0 && h > 0) {
+          renderer.setSize(w, h);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+        }
+      }
+    });
+    resizeObserver.observe(container);
+
+    /** 렌더 루프 — Lissajous 곡선 자동 이동 + 호흡 반경 */
+    const clock = new THREE.Clock();
+
+    const renderLoop = () => {
+      const elapsed = clock.getElapsedTime();
+      uniforms.uTime.value = elapsed;
+
+      /** Lissajous 곡선으로 스포트라이트 자동 이동 */
+      const spotX = Math.sin(elapsed * 0.2) * 1.2 + Math.cos(elapsed * 0.13) * 0.6;
+      const spotY = Math.cos(elapsed * 0.17) * 1.0 + Math.sin(elapsed * 0.11) * 0.5;
+      uniforms.uSpotlight.value.set(spotX, spotY);
+
+      /** 호흡 반경 */
+      uniforms.uSpotlightRadius.value = 1.8 + Math.sin(elapsed * 0.35) * 0.3;
+
+      renderer.render(scene, camera);
+      animationIdRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    renderLoop();
+
+    /** 리소스 정리 */
+    return () => {
+      cancelAnimationFrame(animationIdRef.current);
+      resizeObserver.disconnect();
+      geometry.dispose();
+      material.dispose();
+      renderer.dispose();
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
+      }
+    };
+  }, [colorStroke, colorAccent, colorBackground]);
+
+  return (
+    <Box
+      ref={ containerRef }
+      sx={ {
+        width: '100%',
+        height: '100%',
+        '& canvas': {
+          display: 'block',
+          width: '100% !important',
+          height: '100% !important',
+        },
+      } }
+    />
+  );
+}
+
+/**
+ * FlashlightPattern — 손전등으로 어두운 공간을 이리저리 비추는 인터랙션
+ *
+ * 동작 흐름:
+ * 1. 100,000개 파티클이 거의 보이지 않게 어둡게 떠다닌다
+ * 2. 손전등 빛이 빠르고 불규칙하게 공간을 휩쓸며 이동한다
+ * 3. 빛이 비추는 영역의 파티클이 확 밝아지며 따뜻한 노란빛으로 드러난다
+ * 4. 빛 중심에 가까울수록 백열등처럼 더 밝고 커진다
+ * 5. 빛이 지나가면 다시 어둠 속에 잠긴다
+ *
+ * Props:
+ * @param {string} colorStroke - 파티클 기본 색상 (어둠 속) [Required]
+ * @param {string} colorAccent - 빛에 드러난 파티클 색상 [Required]
+ * @param {string} colorBackground - 배경 색상 [Required]
+ */
+function FlashlightPattern({ colorStroke, colorAccent, colorBackground }) {
+  const containerRef = useRef(null);
+  const animationIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const PARTICLE_COUNT = 100000;
+
+    /** Three.js 씬 초기화 */
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(colorBackground);
+
+    const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+    camera.position.set(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const { width, height } = container.getBoundingClientRect();
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    container.appendChild(renderer.domElement);
+
+    /** 파티클 어트리뷰트 초기화 */
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const baseRadii = new Float32Array(PARTICLE_COUNT);
+    const angles = new Float32Array(PARTICLE_COUNT);
+    const speeds = new Float32Array(PARTICLE_COUNT);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+    const opacities = new Float32Array(PARTICLE_COUNT);
+    const depths = new Float32Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const si = i * 6 + 1337;
+      positions[i * 3] = 0;
+      positions[i * 3 + 1] = 0;
+      positions[i * 3 + 2] = 0;
+
+      baseRadii[i] = 0.5 + seededRandom(si) * 3.0;
+      angles[i] = seededRandom(si + 1) * Math.PI * 2;
+      speeds[i] = 0.3 + seededRandom(si + 2) * 0.7;
+      sizes[i] = 1.0 + seededRandom(si + 3) * 4.0;
+      opacities[i] = 0.15 + seededRandom(si + 4) * 0.55;
+      depths[i] = -1.0 + seededRandom(si + 5) * 2.0;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aBaseRadius', new THREE.BufferAttribute(baseRadii, 1));
+    geometry.setAttribute('aAngle', new THREE.BufferAttribute(angles, 1));
+    geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aOpacity', new THREE.BufferAttribute(opacities, 1));
+    geometry.setAttribute('aDepth', new THREE.BufferAttribute(depths, 1));
+
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10);
+
+    const strokeRgb = hexToGLColor(colorStroke);
+    const accentRgb = hexToGLColor(colorAccent);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uFlashlight: { value: new THREE.Vector2(0, 0) },
+      uFlashlightRadius: { value: 1.4 },
+      uColorStroke: { value: new THREE.Color(...strokeRgb) },
+      uColorAccent: { value: new THREE.Color(...accentRgb) },
+    };
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: flashlightVertexShader,
+      fragmentShader: flashlightFragmentShader,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    const points = new THREE.Points(geometry, material);
+    scene.add(points);
+
+    /** ResizeObserver */
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: w, height: h } = entry.contentRect;
+        if (w > 0 && h > 0) {
+          renderer.setSize(w, h);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+        }
+      }
+    });
+    resizeObserver.observe(container);
+
+    /** 렌더 루프 — 빠르고 불규칙한 손전등 이동 */
+    const clock = new THREE.Clock();
+
+    const renderLoop = () => {
+      const elapsed = clock.getElapsedTime();
+      uniforms.uTime.value = elapsed;
+
+      /** 다중 사인파 합성 — 빠르고 불규칙한 궤적 */
+      const fx = Math.sin(elapsed * 0.4) * 1.5
+               + Math.cos(elapsed * 0.67) * 0.8
+               + Math.sin(elapsed * 1.1) * 0.3;
+      const fy = Math.cos(elapsed * 0.33) * 1.2
+               + Math.sin(elapsed * 0.57) * 0.7
+               + Math.cos(elapsed * 0.89) * 0.25;
+      uniforms.uFlashlight.value.set(fx, fy);
+
+      /** 호흡 반경 — spotlight보다 작고 빠르게 변동 */
+      uniforms.uFlashlightRadius.value = 1.4 + Math.sin(elapsed * 0.6) * 0.25
+                                             + Math.cos(elapsed * 0.9) * 0.15;
+
+      renderer.render(scene, camera);
+      animationIdRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    renderLoop();
+
+    return () => {
+      cancelAnimationFrame(animationIdRef.current);
+      resizeObserver.disconnect();
+      geometry.dispose();
+      material.dispose();
+      renderer.dispose();
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
+      }
+    };
+  }, [colorStroke, colorAccent, colorBackground]);
+
+  return (
+    <Box
+      ref={ containerRef }
+      sx={ {
+        width: '100%',
+        height: '100%',
+        '& canvas': {
+          display: 'block',
+          width: '100% !important',
+          height: '100% !important',
+        },
+      } }
+    />
+  );
+}
+
+/**
+ * ScatterPattern — 각자의 현실이 독립적으로 빛나는 인터랙션
+ *
+ * 동작 흐름:
+ * 1. 100,000개 파티클이 어둡게 흩어져 떠다닌다
+ * 2. 각 파티클이 독립적인 위상과 주기로 펄스한다
+ * 3. 활성화된 파티클이 노란빛으로 빛나며 크기가 커진다
+ * 4. 여기저기서 독립적으로 점등/소등되어 각자의 현실을 표현한다
+ * 5. 외부 광원 없이 파티클 스스로 빛남
+ *
+ * Props:
+ * @param {string} colorStroke - 비활성 파티클 색상 [Required]
+ * @param {string} colorAccent - 활성 파티클 노란색 [Required]
+ * @param {string} colorBackground - 배경 색상 [Required]
+ */
+function ScatterPattern({ colorStroke, colorAccent, colorBackground }) {
+  const containerRef = useRef(null);
+  const animationIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const PARTICLE_COUNT = 100000;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(colorBackground);
+
+    const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+    camera.position.set(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const { width, height } = container.getBoundingClientRect();
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    container.appendChild(renderer.domElement);
+
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const baseRadii = new Float32Array(PARTICLE_COUNT);
+    const angles = new Float32Array(PARTICLE_COUNT);
+    const speeds = new Float32Array(PARTICLE_COUNT);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+    const opacities = new Float32Array(PARTICLE_COUNT);
+    const depths = new Float32Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const si = i * 6 + 2023;
+      positions[i * 3] = 0;
+      positions[i * 3 + 1] = 0;
+      positions[i * 3 + 2] = 0;
+
+      baseRadii[i] = 0.5 + seededRandom(si) * 3.0;
+      angles[i] = seededRandom(si + 1) * Math.PI * 2;
+      speeds[i] = 0.3 + seededRandom(si + 2) * 0.7;
+      sizes[i] = 1.0 + seededRandom(si + 3) * 4.0;
+      opacities[i] = 0.15 + seededRandom(si + 4) * 0.55;
+      depths[i] = -1.0 + seededRandom(si + 5) * 2.0;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aBaseRadius', new THREE.BufferAttribute(baseRadii, 1));
+    geometry.setAttribute('aAngle', new THREE.BufferAttribute(angles, 1));
+    geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aOpacity', new THREE.BufferAttribute(opacities, 1));
+    geometry.setAttribute('aDepth', new THREE.BufferAttribute(depths, 1));
+
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10);
+
+    const strokeRgb = hexToGLColor(colorStroke);
+    const accentRgb = hexToGLColor(colorAccent);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uColorStroke: { value: new THREE.Color(...strokeRgb) },
+      uColorAccent: { value: new THREE.Color(...accentRgb) },
+    };
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: scatterVertexShader,
+      fragmentShader: scatterFragmentShader,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    const points = new THREE.Points(geometry, material);
+    scene.add(points);
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: w, height: h } = entry.contentRect;
+        if (w > 0 && h > 0) {
+          renderer.setSize(w, h);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+        }
+      }
+    });
+    resizeObserver.observe(container);
+
+    const clock = new THREE.Clock();
+
+    const renderLoop = () => {
+      uniforms.uTime.value = clock.getElapsedTime();
+      renderer.render(scene, camera);
+      animationIdRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    renderLoop();
+
+    return () => {
+      cancelAnimationFrame(animationIdRef.current);
+      resizeObserver.disconnect();
+      geometry.dispose();
+      material.dispose();
+      renderer.dispose();
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
+      }
+    };
+  }, [colorStroke, colorAccent, colorBackground]);
+
+  return (
+    <Box
+      ref={ containerRef }
+      sx={ {
+        width: '100%',
+        height: '100%',
+        '& canvas': {
+          display: 'block',
+          width: '100% !important',
+          height: '100% !important',
+        },
+      } }
+    />
+  );
+}
+
+/**
+ * NebulaPattern — 얽혀진 레일(인생트랙)을 노란빛이 따라 채워지며 옮겨감
+ *
+ * 동작 흐름:
+ * 1. 100,000개 파티클이 4개의 교차하는 곡선 레일을 따라 분포한다
+ * 2. 레일은 얇고 선명한 트랙 형태로, 서로 얽혀 있지만 구분된다
+ * 3. 하나의 레일이 한쪽 끝에서 노란빛으로 채워지기 시작한다
+ * 4. 빛이 레일을 따라 전진하며 끝까지 채운다 (3초)
+ * 5. 다 채워지면 이전 레일은 서서히 페이드, 다음 레일이 채워지기 시작한다
+ * 6. 4개 레일을 순환하며 "다른 시나리오를 선택하는" 느낌을 준다
+ *
+ * Props:
+ * @param {string} colorStroke - 비활성 레일 파티클 색상 [Required]
+ * @param {string} colorAccent - 활성 레일 노란색 [Required]
+ * @param {string} colorBackground - 배경 색상 [Required]
+ */
+function NebulaPattern({ colorStroke, colorAccent, colorBackground }) {
+  const containerRef = useRef(null);
+  const animationIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const PARTICLE_COUNT = 100000;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(colorBackground);
+
+    const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+    camera.position.set(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const { width, height } = container.getBoundingClientRect();
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    container.appendChild(renderer.domElement);
+
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const baseRadii = new Float32Array(PARTICLE_COUNT);
+    const angles = new Float32Array(PARTICLE_COUNT);
+    const speeds = new Float32Array(PARTICLE_COUNT);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+    const opacities = new Float32Array(PARTICLE_COUNT);
+    const depths = new Float32Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const si = i * 6 + 4096;
+      positions[i * 3] = 0;
+      positions[i * 3 + 1] = 0;
+      positions[i * 3 + 2] = 0;
+
+      baseRadii[i] = 0.5 + seededRandom(si) * 3.0;
+      angles[i] = seededRandom(si + 1) * Math.PI * 2;
+      speeds[i] = 0.3 + seededRandom(si + 2) * 0.7;
+      sizes[i] = 1.0 + seededRandom(si + 3) * 4.0;
+      opacities[i] = 0.15 + seededRandom(si + 4) * 0.55;
+      depths[i] = -1.0 + seededRandom(si + 5) * 2.0;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aBaseRadius', new THREE.BufferAttribute(baseRadii, 1));
+    geometry.setAttribute('aAngle', new THREE.BufferAttribute(angles, 1));
+    geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aOpacity', new THREE.BufferAttribute(opacities, 1));
+    geometry.setAttribute('aDepth', new THREE.BufferAttribute(depths, 1));
+
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10);
+
+    const strokeRgb = hexToGLColor(colorStroke);
+    const accentRgb = hexToGLColor(colorAccent);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uActiveLane: { value: 0 },
+      uFillProgress: { value: 0 },
+      uColorStroke: { value: new THREE.Color(...strokeRgb) },
+      uColorAccent: { value: new THREE.Color(...accentRgb) },
+    };
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: nebulaVertexShader,
+      fragmentShader: nebulaFragmentShader,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    const points = new THREE.Points(geometry, material);
+    scene.add(points);
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: w, height: h } = entry.contentRect;
+        if (w > 0 && h > 0) {
+          renderer.setSize(w, h);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+        }
+      }
+    });
+    resizeObserver.observe(container);
+
+    /** 렌더 루프 — 레일 채움: 3초 채움 + 0.5초 홀드, 4레인 순환 */
+    const clock = new THREE.Clock();
+    const FILL_DURATION = 3.0;
+    const HOLD_DURATION = 0.5;
+    const SEGMENT = FILL_DURATION + HOLD_DURATION;
+    const TOTAL_CYCLE = SEGMENT * 4;
+
+    const renderLoop = () => {
+      const elapsed = clock.getElapsedTime();
+      uniforms.uTime.value = elapsed;
+
+      const cycleT = elapsed % TOTAL_CYCLE;
+      const segIndex = Math.floor(cycleT / SEGMENT);
+      const segT = cycleT % SEGMENT;
+
+      /** 채움 진행도 (smoothstep 이징 — 시작은 빠르고 끝이 느리게) */
+      let fillProgress;
+      if (segT < FILL_DURATION) {
+        const t = segT / FILL_DURATION;
+        fillProgress = t * t * (3 - 2 * t);
+      } else {
+        fillProgress = 1.0;
+      }
+
+      uniforms.uActiveLane.value = segIndex;
+      uniforms.uFillProgress.value = fillProgress;
+
+      renderer.render(scene, camera);
+      animationIdRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    renderLoop();
+
+    return () => {
+      cancelAnimationFrame(animationIdRef.current);
+      resizeObserver.disconnect();
+      geometry.dispose();
+      material.dispose();
+      renderer.dispose();
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
+      }
+    };
+  }, [colorStroke, colorAccent, colorBackground]);
+
+  return (
+    <Box
+      ref={ containerRef }
+      sx={ {
+        width: '100%',
+        height: '100%',
+        '& canvas': {
+          display: 'block',
+          width: '100% !important',
+          height: '100% !important',
+        },
+      } }
+    />
+  );
+}
+
+/**
+ * ChoosePattern 컴포넌트
+ *
+ * 가능태 공간의 구가 천천히 회전하고,
+ * 우측에서 노란빛이 구를 비춰 한쪽 면만 밝게 빛나는 비주얼.
+ *
+ * 동작 흐름:
+ * 1. 파티클로 이루어진 구가 Y축 기준으로 천천히 회전한다
+ * 2. 우측에서 노란색 빛(#FFC66E)이 구를 향해 비춘다
+ * 3. 빛을 받는 면은 밝은 노란색, 반대편은 희미한 흰색
+ *
+ * Props:
+ * @param {string} colorStroke - 어두운 면 색상 [Required]
+ * @param {string} colorAccent - 밝은 면 색상 (#FFC66E) [Required]
+ * @param {string} colorBackground - 배경 색상 [Required]
+ */
+function ChoosePattern({ colorStroke, colorAccent, colorBackground }) {
+  const containerRef = useRef(null);
+  const animationIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const PARTICLE_COUNT = 100000;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(colorBackground);
+
+    const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+    camera.position.set(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const { width, height } = container.getBoundingClientRect();
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    container.appendChild(renderer.domElement);
+
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const baseRadii = new Float32Array(PARTICLE_COUNT);
+    const angles = new Float32Array(PARTICLE_COUNT);
+    const speeds = new Float32Array(PARTICLE_COUNT);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+    const opacities = new Float32Array(PARTICLE_COUNT);
+    const depthArr = new Float32Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const si = i * 6 + 8192;
+      positions[i * 3] = 0;
+      positions[i * 3 + 1] = 0;
+      positions[i * 3 + 2] = 0;
+
+      baseRadii[i] = 0.5 + seededRandom(si) * 3.0;
+      angles[i] = seededRandom(si + 1) * Math.PI * 2;
+      speeds[i] = 0.3 + seededRandom(si + 2) * 0.7;
+      sizes[i] = 1.0 + seededRandom(si + 3) * 4.0;
+      opacities[i] = 0.15 + seededRandom(si + 4) * 0.55;
+      depthArr[i] = -1.0 + seededRandom(si + 5) * 2.0;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aBaseRadius', new THREE.BufferAttribute(baseRadii, 1));
+    geometry.setAttribute('aAngle', new THREE.BufferAttribute(angles, 1));
+    geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aOpacity', new THREE.BufferAttribute(opacities, 1));
+    geometry.setAttribute('aDepth', new THREE.BufferAttribute(depthArr, 1));
+
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10);
+
+    const strokeRgb = hexToGLColor(colorStroke);
+    const accentRgb = hexToGLColor(colorAccent);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uColorStroke: { value: new THREE.Color(...strokeRgb) },
+      uColorAccent: { value: new THREE.Color(...accentRgb) },
+    };
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: chooseVertexShader,
+      fragmentShader: chooseFragmentShader,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    const points = new THREE.Points(geometry, material);
+    scene.add(points);
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: w, height: h } = entry.contentRect;
+        if (w > 0 && h > 0) {
+          renderer.setSize(w, h);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+        }
+      }
+    });
+    resizeObserver.observe(container);
+
+    /** 렌더 루프 — 시간만 업데이트 (회전은 셰이더에서 처리) */
+    const clock = new THREE.Clock();
+
+    const renderLoop = () => {
+      uniforms.uTime.value = clock.getElapsedTime();
+      renderer.render(scene, camera);
+      animationIdRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    renderLoop();
+
     return () => {
       cancelAnimationFrame(animationIdRef.current);
       resizeObserver.disconnect();
