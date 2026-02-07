@@ -6,17 +6,20 @@ import GeometricPattern from '../components/dynamic-color/GeometricPattern';
  * VariantsSpaceCard 컴포넌트
  *
  * 가능태 공간 섹션의 가로 스크롤 카드.
- * 상단에 GeometricPattern 키비주얼, 하단에 헤드라인 + 본문 텍스트를 표시한다.
+ * 키비주얼이 뷰포트 세로 중앙에 위치하고, 그 아래에 헤드라인 + 본문이 표시된다.
+ * 타이틀 슬라이드의 구와 키비주얼이 일직선 상에 놓인다.
  *
  * 동작 흐름:
  * 1. 사용자가 가로 스크롤하여 카드가 뷰포트에 진입한다
- * 2. 상단에 GeometricPattern 모티프가 렌더링된다
- * 3. 하단에 헤드라인과 본문이 표시된다
+ * 2. 중앙에 GeometricPattern 모티프가 렌더링된다
+ * 3. 아래에 헤드라인과 본문이 표시된다
  *
  * Props:
  * @param {string} motif - GeometricPattern variant [Required]
  * @param {string} headline - 카드 제목 [Required]
  * @param {string} body - 카드 본문 [Required]
+ * @param {object} scrollInfluenceRef - 스크롤 기반 수렴 제어 ref (grid variant 전용) [Optional]
+ * @param {object} visualRef - 비주얼 영역 DOM ref (부모에서 opacity 제어용) [Optional]
  * @param {object} sx - 추가 스타일 [Optional]
  *
  * Example usage:
@@ -30,6 +33,8 @@ function VariantsSpaceCard({
   motif,
   headline,
   body,
+  scrollInfluenceRef,
+  visualRef,
   sx = {},
 }) {
   return (
@@ -43,27 +48,37 @@ function VariantsSpaceCard({
         ...sx,
       } }
     >
-      {/* 키비주얼 — GeometricPattern */}
+      {/* 상단 여백 — 키비주얼 중앙 정렬 (구 중심 = 50vh) */}
+      <Box sx={ { flex: '0 0 calc(50vh - 17.5vh)' } } />
+
+      {/* 키비주얼 — GeometricPattern (중심이 뷰포트 50vh에 위치) */}
       <Box
+        ref={ visualRef }
         sx={ {
-          flex: '0 0 30%',
+          flex: '0 0 35vh',
           position: 'relative',
           minHeight: 0,
+          opacity: visualRef ? 0 : 1,
         } }
       >
-        <GeometricPattern variant={ motif } />
+        <GeometricPattern
+          variant={ motif }
+          scrollInfluenceRef={ scrollInfluenceRef }
+        />
       </Box>
 
       {/* 텍스트 영역 */}
       <Box
         sx={ {
-          flex: '1 1 70%',
+          flex: '1 1 auto',
           px: { xs: 3, md: 4 },
-          py: { xs: 3, md: 4 },
+          pt: { xs: 3, md: 4 },
+          pb: { xs: 2, md: 3 },
           display: 'flex',
           flexDirection: 'column',
           gap: 2,
           overflow: 'auto',
+          minHeight: 0,
         } }
       >
         {/* 헤드라인 */}
